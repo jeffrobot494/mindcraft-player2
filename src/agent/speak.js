@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { TTSConfig as gptTTSConfig } from '../models/gpt.js';
 import { TTSConfig as geminiTTSConfig } from '../models/gemini.js';
+import { TTSConfig as player2TTSConfig } from '../models/player2.js';
 
 let speakingQueue = []; // each item: {text, model, audioData, ready}
 let isSpeaking = false;
@@ -30,6 +31,7 @@ async function fetchRemoteAudio(txt, model) {
     function getModelUrl(prov) {
         if (prov === 'openai') return gptTTSConfig.baseUrl;
         if (prov === 'google') return geminiTTSConfig.baseUrl;
+        if (prov === 'player2') return player2TTSConfig.baseUrl;
         return 'https://api.openai.com/v1';
     }
 
@@ -48,6 +50,8 @@ async function fetchRemoteAudio(txt, model) {
         return gptTTSConfig.sendAudioRequest(txt, mdl, voice, url);
     } else if (prov === 'google') {
         return geminiTTSConfig.sendAudioRequest(txt, mdl, voice, url);
+    } else if (prov === 'player2') {
+        return player2TTSConfig.sendAudioRequest(txt, mdl, voice, url);
     }
     else {
         throw new Error(`TTS Provider ${prov} is not supported.`);

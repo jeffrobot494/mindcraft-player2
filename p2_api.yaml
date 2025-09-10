@@ -1,0 +1,2478 @@
+openapi: 3.1.0
+info:
+  title: Player2 Web API
+  x-logo:
+    url: 'https://player2.game/assets/logo.png'
+    altText: Player2 logo
+  termsOfService: https://player2.game/devtos
+  contact:
+    name: support@elefant.gg
+  license:
+      name: Player2 API Terms of Service
+      url: https://player2.game/devtos
+  version: 1.0.0
+servers:
+  - url: https://api.player2.game/v1
+x-tagGroups:
+  - name: Overview
+    tags:
+      - Introduction
+      - Authentication
+      - Health
+  - name: Auth Flows
+    tags:
+      - Device Authorization Flow
+      - Authorization Code Flow
+  - name: Chat
+    tags:
+      - Completions
+  - name: Speech
+    tags:
+      - Text To Speech
+      - Speech To Text
+  - name: Characters
+    tags:
+      - Characters
+  - name: Account
+    tags:
+      - Joules
+  - name: NPC API
+    tags:
+      - NPC
+tags:
+  - name: Introduction
+    description: |
+      The Player2 API gives developers free access to tools for building their own AI powered games.
+      If you have any questions or need help, please join our [Discord server](https://discord.gg/elefant-ai-1247544452294377543).
+
+      The Player2 API exposes two ways of creating AI NPCs in your games
+
+      1. The high-level easy to use [NPC API](#tag/NPC)
+      2. The more advanced [completions](#tag/Completions) endpoint
+
+      # Joules and AI Power
+
+      All AI operations in the Player2 API consume **joules**, which represent your user's available "AI power" for making requests to our AI services including chat completions, character interactions, text-to-speech, and speech-to-text operations.
+
+      - **Joule Consumption**: Each AI request consumes a certain amount of joules based on the complexity and length of the operation
+      - **Balance Tracking**: You can check your user's current joule balance and patron tier using the [GET /joules](#tag/Joules) endpoint
+      - **Insufficient Joules**: When the joule balance is too low, API requests will return an `insufficient_credits` error with guidance on topping up the account
+      - **Patron Benefits**: Patron subscribers receive additional joules and benefits based on their tier level
+
+      Monitor your user's joule usage to ensure uninterrupted service. The joules endpoint provides real-time balance information to help you implement appropriate user notifications and upgrade prompts.
+
+      **NOTE**: By using the Player2 API you agree to our [Terms of Service](https://player2.game/devtos).
+
+  - name: Authentication
+    description: |
+      Calls to the Player2 Web API require authentication. There are a few ways to authenticate your users.
+
+      First, if the user has the Player2 App installed and are logged in, you can simply
+      call `POST http://localhost:4315/v1/login/web/{game_client_id}` and get the response
+      `{"p2Key": <api-key>}` that you can use to authenticate their requests with the web api.
+      This is the easiest way to authenticate if they have the Player2 App and are already logged into it. You can find
+      your game client id in the [Developer Dashboard](https://player2.game/profile/developer).
+
+      However, if the user does not have the Player2 App installed you need a fallback method. We've implemented the
+      Authorization Code and Device Code OAuth2 Flows for this purpose. See the flows below for more details.
+
+      Once you've received the user's P2 Key you use it to authenticate their requests with the following header:
+
+      ```
+      Authorization: Bearer <api-key>
+      ```
+
+      **IMPORTANT**: You should never store user credentials outside of the user's device. Any unauthorized usage of a user's api
+      key will be considered a violation of our [Terms of Service](https://player2.game/devtos).
+
+  - name: Device Authorization Flow
+    description: |
+      The device authorization flow is used to authenticate a user on a device that may not have a browser, a webview, or easy
+      redirect access to your game. We follow the [OAuth 2.0 Device Authorization Grant](https://oauth.net/2/device-flow/). The
+      flow is as follows:
+      1. Start the flow by calling `/login/device/new` - this could be when a user clicks a button to login in your game.
+      2. The game provides the `verificationUri` and `userCode` (or `verificationUriComplete`) to the user to approve access.
+      3. The user approves the game to access the API on their behalf.
+      4. While the user is approving access you should poll the `/login/device/token` endpoint at the `interval` provided in the response.
+      5. Once the user has approved access you will receive a `p2Key` in the response.
+
+  - name: Authorization Code Flow
+    description: |
+      The authorization code flow is used to authenticate users in web applications or games that can handle HTTP redirects.
+      We follow the [OAuth 2.0 Authorization Code Grant with PKCE](https://oauth.net/2/pkce/). The flow is as follows:
+
+      ## PKCE Security Implementation
+
+      PKCE (Proof Key for Code Exchange) adds security by using dynamically generated secrets that prevent authorization code interception attacks. Here's what you need to implement:
+
+      ### 1. Generate Code Verifier and Code Challenge
+
+      **Code Verifier**: A cryptographically random string (43-128 characters) using unreserved characters [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+
+      **Code Challenge**: A base64url-encoded SHA256 hash of the code verifier
+
+      **Code Challenge Method**: Always use `"S256"` (SHA256 hashing)
+
+      ```javascript
+      // Example implementation in JavaScript
+      function generateCodeVerifier() {
+        const array = new Uint8Array(32);
+        crypto.getRandomValues(array);
+        return base64URLEncode(array);
+      }
+
+      async function generateCodeChallenge(verifier) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(verifier);
+        const digest = await crypto.subtle.digest('SHA-256', data);
+        return base64URLEncode(new Uint8Array(digest));
+      }
+
+      function base64URLEncode(array) {
+        return btoa(String.fromCharCode(...array))
+          .replace(/=/g, '')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_');
+      }
+      ```
+
+      ### 2. Complete Authorization Flow
+
+      1. **Generate PKCE parameters** in your client application:
+         - Create a `code_verifier` (random 43-128 character string)
+         - Generate `code_challenge` (base64url-encoded SHA256 hash of verifier)
+         - Set `code_challenge_method` to `"S256"`
+
+      2. **Redirect user to authorization server** with parameters:
+         - `client_id`: Your Game Client ID from the Developer Dashboard
+         - `redirect_uri`: Your registered callback URL
+         - `code_challenge`: The generated challenge
+         - `code_challenge_method`: `"S256"`
+         - `response_type`: `"code"`
+
+      3. **User approves access** on the authorization server
+
+      4. **Authorization server redirects** back to your `redirect_uri` with an `authorization_code`
+
+      5. **Exchange code for API key** by calling `/login/authorization_code/token` with:
+         - The received `authorization_code`
+         - Your original `code_verifier` (NOT the challenge)
+         - Other required parameters
+
+      ### Authorization URL Construction
+
+      When redirecting users to the authorization server, construct the URL like this:
+
+      ```
+      https://player2.game/authorize?
+        response_type=code&
+        client_id=YOUR_CLIENT_ID&
+        redirect_uri=YOUR_ENCODED_REDIRECT_URI&
+        code_challenge=GENERATED_CODE_CHALLENGE&
+        code_challenge_method=S256&
+        state=OPTIONAL_STATE_PARAMETER
+      ```
+
+      **Important**: URL-encode all parameter values, especially the `redirect_uri`.
+
+      ### Security Benefits
+
+      - **Dynamic secrets**: Each authorization request uses unique, randomly generated values
+      - **Interception protection**: Even if the authorization code is intercepted, it cannot be used without the original code verifier
+      - **No client secret required**: Perfect for public clients like mobile apps and SPAs where secrets cannot be securely stored
+
+  - name: Chat
+    description: Create a chat response from the given chat messages.
+
+  - name: Health
+    description: |
+      Check the health of the API. This endpoint is used to verify that the API is running, that you have correct credentials, and is
+      used to track usage of your game. You should call this endpoint every 60 seconds so that we can attribute usage to your game.
+
+  - name: NPC
+    description: |
+        The NPC API provides a complete solution for creating and managing AI-powered Non-Player Characters in your games. This high-level API handles conversation history, personality persistence, and real-time response streaming, so you can focus on your game logic.
+
+        ## Quick Start Workflow
+
+        1. **Spawn an NPC** using `/npcs/spawn` with personality, voice, and functions
+        2. **Send player messages** to `/npcs/{npc_id}/chat` with game context
+        3. **Listen for responses** on the streaming `/npcs/responses` endpoint
+        4. **Remove NPCs** when no longer needed with `/npcs/{npc_id}/kill`
+
+        ## Key Features
+
+        - **Persistent Conversations**: Each NPC maintains its own conversation history and personality
+        - **Game State Integration**: Include dynamic game context in every message
+        - **Function Execution**: NPCs can execute custom commands/actions in your game
+        - **Voice Responses**: Optional text-to-speech audio for immersive experiences
+        - **Real-time Streaming**: Get responses as they're generated for responsive gameplay
+
+        ## Example Usage
+
+        ```bash
+        # 1. Create an NPC
+        curl -X POST "https://api.player2.game/v1/npcs/spawn" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "Captain Blackbeard",
+            "short_name": "Captain",
+            "character_description": "A weathered pirate captain with a love for treasure and adventure",
+            "system_prompt": "You are Captain Blackbeard, speak like a pirate and help players find treasure",
+            "tts": {
+              "voice_ids": ["01955d76-ed5b-753f-9f74-c0674216f0f5"],
+              "speed": 1.0,
+              "audio_format": "mp3"
+            }
+          }'
+
+        # 2. Send a message to the NPC
+        curl -X POST "https://api.player2.game/v1/npcs/{npc_id}/chat" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "sender_name": "PlayerOne",
+            "sender_message": "Hello Captain! Where can I find treasure?",
+            "game_state_info": "Player is on a tropical island with palm trees and a beach",
+            "tts": "server"
+          }'
+
+        # 3. Listen for responses (keep this connection open)
+        curl -X GET "https://api.player2.game/v1/npcs/responses" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+
+  - name: Text To Speech
+    description: |
+      The text to speech (TTS) API allows you add vibrant voices to your game from plain text.
+  - name: Speech To Text
+    description: |
+      The speech to text (STT) API allows you to convert audio from the user's microphone into text in real-time via WebSocket connection.
+  - name: Characters
+    description: |
+      The characters API allows you to get the list of characters the user selected as "My AI Friends" characters in the Player2 website or desktop app.
+
+paths:
+  /chat/completions:
+    post:
+      tags:
+        - Completions
+      summary: Create chat completion
+      description: |-
+        Creates a chat response for the provided messages. This endpoint supports both
+        streaming and non-streaming responses based on the `stream` parameter in the request.
+
+        - If `stream` is `false` or not provided, returns a standard JSON response.
+        - If `stream` is `true`, returns a Server-Sent Events (SSE) stream.
+
+        This is intended to follow the [OpenAI API](https://platform.openai.com/docs/api-reference/chat).
+      operationId: chat_completion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            examples:
+              text:
+                value:
+                  messages:
+                    - content: You are an entertaining assistant who tries to make jokes.
+                      role: system
+                    - content: Hello, how are you doing today?
+                      role: user
+                  stream: false
+              image:
+                value:
+                  messages:
+                    - content: You are a meticulous game art critic who scrutinizes every pixel and never overlooks a single detail.
+                      role: system
+                    - content:
+                        - text: What is in this image?
+                          type: text
+                        - image_url:
+                            url: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD//gAwSlBHIGNvbXByZXNzZWQgd2l0aCBodHRwczovL2V6Z2lmLmNvbS9vcHRpanBlZ//bAEMAEAsMDgwKEA4NDhIREBMYKBoYFhYYMSMlHSg6Mz08OTM4N0BIXE5ARFdFNzhQbVFXX2JnaGc+TXF5cGR4XGVnY//bAEMBERISGBUYLxoaL2NCOEJjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY//AABEIAIAAgAMBIgACEQEDEQH/xAAbAAEAAwADAQAAAAAAAAAAAAAABQYHAgMEAf/EAEEQAAEEAQMBAwUMCAcBAAAAAAEAAgMEEQUGEiETMUEHFiJRYRQVNXFyc5GTsbLB0TIzN1RVY3SBJTRCYmShosL/xAAaAQEAAwEBAQAAAAAAAAAAAAAAAgMEBQEG/8QAIhEBAAICAQQCAwAAAAAAAAAAAAECAxEEEiEiQRMxFFFh/9oADAMBAAIRAxEAPwC/IiICIiAiIgIiICIiAiIgIiICIiAiIgKO1jWamjRxSW+0xI4tbwby64UioPdGhS65BXjinZEYnlxLmk5yMIPN586P67H1S92kbjoaxYfBUMvNjOZ5s4jGcfisuvVnUrs9Vzg50LywuAxnC0Da22ZtGuPtSWY5WyRcQ1rSMdQfwQWhR13WqdGcRTF5cW8vRbkLs1ieSrpc80LuMjAC04z4hUJ7i97nO73Ek/GqcuSadobeLxoyxNrfS4+c2n/zvq1KQTMsQsljOWvaHD+/VZyvXT1K1RjfHWkDGvOSOIPX6FXXPO/JpycCsx4T3/q229dpU7DoZS8uaAfRbkdV8q69StWGQxmQPf3cm4HdnvVITvUfnttP8DHrW+7S0UVt21Nb03nO7k5ry0HAHQYUqtdZ3G3JvSaWms+hEReoCIiAiIgyDcHw9qP9Q/7VrkP6lnyR9iyPcHw9qP8AUP8AtWuQ/qWfJH2IPDuD4EtfJH3gqKtKIBGCMj1FVLXdEdWcbFZpdE4+k3q5wJySe7uWbPSZ8odLg5q18J9oJERZXVERSujaM/UJOcwLa4/S72lwIPcVKtZtOoQvetK9Vk5tT4JPzrvwU0uMbGxsDGDAAwuS31jpiIfP5b9d5t+xERSViIiAobcWvDQoYJDWM/avLcB/HGBn1KZUXrmh19biijsSSsETi4dmR4jHiEGWahZ926hYtcOHbSOfxznGT3LRNt7nGtWXVRUMPZxc+Rk5ZwQPV7V5vMHTf3q39LfyUjom2ami2n2K80z3PZwIkIxjIPgPYgm18cA5paRkEYK+ogqOu6IarjYqsPYnq5jR0jAA9qglpLmte0te0Oae8EZBVfn202TUg5rnCs/LnkEAtd4ADHcsuTD33V1OPzI6enJ6RmiaQ+/KJZAWwNOckZD8Hq1XKGJkETYomhrGjDQPAJHGyJnCNjWN9TRhc1dSkUhjz57Zrbn6ERFYziIiD4vHNq+nQSuimvVo5GHDmukAIXtWZanSGo75npueYxNPxLgMkejlBo1W3WuRl9WeOZgOC6NwcAVwfqFKO0Kr7ULbBIAiLxyJPd0VHlfPszWIa9ew+zBLHzdG88G8ieOenxL7qn7SIfnofuhBoK6LVutTYH2p44WuOAZHBoJXes83jJNa3NHQfO8V3GLDM5DS7pkD19UF2h1bTrEzYoL1eSR36LWSAkrnY1GlVmENi3DFI4Ahj3gE59izrcOju2zPVlqXJXSvDyHgcS3GO7Hxru3U5z9c05ziS414SSfE8ig0G1dq0g027MUAdnj2jw3K65tUoV+HbXa8faN5s5SAcm+sexVbyk/qKHy5PsCht19Ro4/4EaC/e/mk/wASqfWhdkuq6fDHG+W7XYyUcmOdIAHD1hVceT6DAPvjL9WFG72pjToNKqNeZBDA9ocRjOCEF3brelOcGt1GqSTgASjqvXNNHXidLNI2ONoy5zjgD+6zjW9tM0bS4L8VuSR73sAaWAYyCc/9KTs19a1ra2me5JJJjI2T3RmQN5jl0znv7kFsr6pQtSiKvdryyEZDWSAn6F7Flep6fY23fp9jZkZYkhD3lvQsJOC3IWpoHgs1v3I9P35NbmDjHFPlwaASfRx+K0tZvZrxW/KFJXsMEkUljDmnxHBB2Xy7d+u136fG+NkcWC+duBlpzjIz61z1T9pEPz0P3QrvQ0+ppsJipQiGNzuRaCTk93iqLrc0dfyhMmmeGRxyxOc49wHEINEWb7ulbBvFkzwS2MQvIHfgHKuPnPov8Sg+k/kqfupjJt6RMeA5j+xa4esEoOjd2u1dbNY1Y5Wdi1/LtABnOPUfYrHrW3vfGhUvVnhtuGKPq9x48WjPdjvUJvnS6WmOqClXbCJGv5YJOcYx3/GrzH8Ct/ph9xBSKLr+9Lccd18IgqkPeGAscQ7p07+vRcd+QtrX6EEeeEVUMbk5OA4gL0+Tb/MXvm2faV1eUP4YqfMf/RQdun7k3BNfrRTVsRPla159zOGAT16p5SOtmiP5b/tCsw3PouB/iUH0lVXygTxWTp08Dw+N8T3NcO4jIQcNe3DU1nSqun1o5mSiWP0pAA3ux4H2q01Hs21tyKO9Ixzq7DkRnq/0v9OcZ71X90aRQ03QqtunWbDOZY/TBJP6JPj7QvBuSzNc27oliy8yTPEpc4jv6gIOuQ393a20sDWtZyDHuYQ1rQcgEjPVaaqzoOq7f07TYY4rcEMj2NdK3ker+IB/urOg+KE82a3v9779vN23adpw6cc4x6sqcRB8Vf1baNPVdQkuTWJ2PkABazjjoAPEKwogqXmDQ/e7X/n8lIXtr1b2qx6hJPM2RnDDW4x6Pd4KdRBD69t6vrphNiaWPsg4Ds8dc49Y9ikmwNbUFfJ4hnDPjjGF3IghtB25W0N8z680shla1p7THTGfUPauOubZra3ZjnnnmjdGzgAzGMZz4hTaIKl5g0P3u1/5/Jey9tGndqU68lidrakZjaW8cke3orCiCM1bRYdV06OlNLIxkbmuDmYycDHiF4rW0qlrTqVJ9icMqcuLhxy7kfHorAiCpDYNAEH3Xa6H/b+Sti+ogIiICIiAiIgIiICIiAiIgIiICIiD/9k=
+                          type: image_url
+                      role: user
+                  stream: false
+              stream:
+                value:
+                  messages:
+                    - content: You are an entertaining assistant who tries to make jokes.
+                      role: system
+                    - content: Hello, how are you doing today?
+                      role: user
+                  stream: true
+          '*/*':
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionJSONResponse'
+              example:
+                choices:
+                  - finish_reason: stop
+                    index: 0
+                    message:
+                      content: Hello, how can I help you?
+                      role: assistant
+                created: 1677648672
+                id: chatcmpl-123
+                model: gpt-3.5-turbo
+                object: chat.completion
+                usage:
+                  completion_tokens: 6
+                  prompt_tokens: 25
+                  total_tokens: 31
+            text/event-stream:
+              x-ogen-json-streaming: true
+              schema:
+                $ref: '#/components/schemas/ChatCompletionStreamingResponse'
+              example: |+
+                data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}
+
+                data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"delta":{"content":", how can I help you?"}}]}
+
+                data: [DONE]
+
+        default:
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestError'
+        '401':
+          description: The user must be authenticated.
+        '402':
+          description: Insufficient credits to complete the request.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '429':
+          description: Too many requests have been made to the server.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '500':
+          description: Internal server error
+
+  /login/device/new:
+    post:
+      security: []
+      tags:
+        - Device Authorization Flow
+      summary: Start the flow
+      description: |
+        Starts a new device login for the user.
+        When you receive the `verificationUri` and `userCode` (or `verificationUriComplete`)
+        field you should redirect the user to the url to approve access. The user may need to type
+        in the `userCode` to approve access.
+        The user must approve within `expiresIn` seconds or the flow will fail.
+      operationId: login_device_new
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginDeviceNewRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginDeviceNewResponse'
+        '500':
+          description: Internal server error
+  /login/device/token:
+    post:
+      security: []
+      tags:
+        - Device Authorization Flow
+      summary: Poll for the api key
+      description: |
+        Poll for the new api key after starting the flow. The user must approve access via the Player2 website at the url
+        provided in the `verification_uri` (or `verification_uri_complete`) field of the response to `/login/device/new`.
+      operationId: login_device_token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginDeviceTokenRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginDeviceTokenResponse'
+        '500':
+          description: Internal server error
+  /login/authorization_code/token:
+    post:
+      security: []
+      tags:
+        - Authorization Code Flow
+      summary: Exchange authorization code for API key
+      description: |
+        Exchange an authorization code for a P2 API key using OAuth2 Authorization Code flow with PKCE.
+        This endpoint should be called after obtaining an authorization code from the authorization server.
+      operationId: login_authorization_code_token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginAuthorizationCodeTokenRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginAuthorizationCodeTokenResponse'
+        '400':
+          description: |
+            Invalid request. Common errors:
+            - `invalid_request`: Missing or invalid required parameters
+            - `invalid_grant`: Invalid authorization code, expired, or PKCE validation failed
+            - `unsupported_grant_type`: Grant type is not `authorization_code`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestError'
+        '500':
+          description: Internal server error
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Check the health of the API
+      description: ""
+      operationId: health
+      security:
+        - BearerAuth: []
+        - TokenAuth: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /tts/voices:
+    get:
+      tags:
+        - Text To Speech
+      summary: Get available voices
+      description: |
+        This endpoint returns a list of available voices that can be used with the `/tts/speak` endpoint. You can even mix and match voices
+        together by providing multiple ids.
+      operationId: tts_voices
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TTSVoicesResponse'
+  /tts/speak:
+    post:
+      tags:
+        - Text To Speech
+      summary: Speak text
+      description: |
+        This endpoint returns the full audio file for the text and voice provided.
+      operationId: tts_speak
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TTSSpeakRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TTSSpeakResponse'
+        '402':
+          description: Insufficient credits to complete the request.
+        '400':
+          description: Invalid request
+        '401':
+          description: The user must be authenticated.
+        '500':
+          description: Internal server error
+  /tts/stream:
+    post:
+      tags:
+        - Text To Speech
+      summary: Stream text-to-speech audio
+      description: |
+        This endpoint returns streaming audio data for the text and voice provided,
+        allowing for real-time audio playback as the audio is being synthesized.
+        Streaming only supports WAV and MP3 audio formats.
+      operationId: tts_stream
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TTSStreamRequest'
+        required: true
+      responses:
+        '200':
+          description: Streaming audio data
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+                description: Streaming binary audio data
+        '402':
+          description: Insufficient credits to complete the request.
+        '400':
+          description: Invalid request
+        '401':
+          description: The user must be authenticated.
+        '500':
+          description: Internal server error
+  /stt/stream:
+    get:
+      tags:
+        - Speech To Text
+      summary: Real-time speech to text WebSocket stream
+      description: |
+        Establishes a WebSocket connection for real-time speech-to-text transcription.
+
+        **WebSocket Protocol:**
+        - Upgrade to WebSocket using standard WebSocket handshake
+        - Send binary audio data (PCM/linear16 format by default)
+        - Receive JSON messages wrapped in STTEnvelope format
+
+        **Message Format:**
+        All WebSocket messages follow the `STTEnvelope` schema with event-specific data.
+
+        **Event Types:**
+        - `session`: Connection established with stream_id (`STTSessionEvent`)
+        - `open`: Transcriber connection opened (`STTOpenEvent`)
+        - `message`: Transcription result - interim or final (`STTMessageEvent`)
+        - `speech_started`: Voice activity detected (`STTSpeechStartedEvent`) - if vad_events=true
+        - `utterance_end`: End of speech detected (`STTUtteranceEndEvent`) - if utterance_end_ms is set
+        - `error`: Error occurred (`STTErrorEvent`)
+        - `close`: Connection closed (`STTCloseEvent`)
+
+        **Audio Requirements:**
+        - Format: PCM/linear16 (16-bit signed integers)
+        - Sample Rate: As specified in sample_rate parameter (typically 44100 or 48000)
+        - Channels: Mono (1 channel)
+        - Send audio in ~50ms chunks for best results
+
+        See the `STTEnvelope` and related schemas by expanding data field of 101 response:
+      operationId: stt_stream
+      security:
+        - TokenAuth: []
+      parameters:
+        - name: language
+          in: query
+          schema:
+            type: string
+            enum: ["en", "en-US", "en-AU", "en-GB", "en-NZ", "en-IN", "es", "es-419", "fr", "fr-CA", "de", "it", "pt", "pt-BR", "ru", "hi", "ja", "ko", "zh", "zh-CN", "zh-TW", "nl", "tr", "pl", "sv", "no", "da", "fi", "uk", "el", "cs"]
+            default: "en-US"
+          description: BCP-47 language tag for transcription
+        - name: encoding
+          in: query
+          schema:
+            type: string
+            enum: ["linear16", "flac", "mulaw", "alaw", "mp3", "mp4", "opus", "wav"]
+            default: "linear16"
+          description: Audio encoding format
+        - name: sample_rate
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^[1-9]\\d*$"
+          description: Audio sample rate in Hz (e.g., "44100", "48000")
+        - name: interim_results
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Enable real-time interim transcription results
+        - name: utterance_end_ms
+          in: query
+          schema:
+            type: string
+            pattern: "^(100[0-9]|10[1-9][0-9]|1[1-9][0-9][0-9]|[2-4][0-9][0-9][0-9]|5000)$"
+          description: Milliseconds to wait before sending utterance end event (1000-5000ms)
+        - name: diarize
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Enable speaker diarization (identify different speakers)
+        - name: vad_events
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Enable voice activity detection events
+        - name: stream_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Optional stream ID to reconnect to existing session
+      responses:
+        '101':
+          description: WebSocket connection established. Messages follow STTEnvelope schema.
+          headers:
+            Upgrade:
+              schema:
+                type: string
+                example: websocket
+            Connection:
+              schema:
+                type: string
+                example: Upgrade
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/STTEnvelope'
+              examples:
+                session_event:
+                  summary: Session establishment
+                  value:
+                    type: "session"
+                    stream_id: "123e4567-e89b-12d3-a456-426614174000"
+                    timestamp: 1640995200000
+                    data:
+                      stream_id: "123e4567-e89b-12d3-a456-426614174000"
+                message_event:
+                  summary: Transcription result
+                  value:
+                    type: "message"
+                    stream_id: "123e4567-e89b-12d3-a456-426614174000"
+                    timestamp: 1640995201500
+                    data:
+                      channel:
+                        alternatives:
+                          - transcript: "Hello world"
+                            confidence: 0.98
+                      is_final: true
+                error_event:
+                  summary: Error occurred
+                  value:
+                    type: "error"
+                    stream_id: "123e4567-e89b-12d3-a456-426614174000"
+                    timestamp: 1640995201500
+                    data:
+                      err_code: "CONNECTION_FAILED"
+                      err_msg: "Failed to establish connection to transcription service"
+        '400':
+          description: Invalid request parameters
+        '401':
+          description: The user must be authenticated.
+        '500':
+          description: Internal server error
+  /stt/audio:
+    post:
+      tags:
+        - Speech To Text
+      summary: Transcribe audio file
+      description: |
+        Transcribes an audio file to text using speech-to-text technology.
+
+        **Audio Requirements:**
+        - Send the raw audio bytes in the request body as application/octet-stream
+        - Specify the audio format via the `encoding` query parameter (linear16, flac, mulaw, alaw, mp3, mp4, opus, wav)
+        - Specify the sample rate via the `sample_rate` query parameter (e.g., "44100", "48000")
+      operationId: stt_audio
+      parameters:
+        - name: encoding
+          in: query
+          schema:
+            type: string
+            enum: ["linear16", "flac", "mulaw", "alaw", "mp3", "mp4", "opus", "wav"]
+          description: Audio encoding format
+        - name: sample_rate
+          in: query
+          schema:
+            type: string
+            pattern: "^[1-9]\\d*$"
+          description: Audio sample rate in Hz (e.g., "44100", "48000")
+        - name: language
+          in: query
+          schema:
+            type: string
+            enum: ["en", "en-US", "en-AU", "en-GB", "en-NZ", "en-IN", "es", "es-419", "fr", "fr-CA", "de", "it", "pt", "pt-BR", "ru", "hi", "ja", "ko", "zh", "zh-CN", "zh-TW", "nl", "tr", "pl", "sv", "no", "da", "fi", "uk", "el", "cs"]
+          description: BCP-47 language tag for transcription
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: 'Transcription successful'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioTranscription'
+        '400':
+          description: Invalid request parameters or audio format
+        '401':
+          description: The user must be authenticated.
+        '402':
+          description: Insufficient credits to complete the request.
+        '500':
+          description: Internal server error
+  /selected_characters:
+    get:
+      tags:
+        - Characters
+      summary: Get User "My AI Friends" characters
+      description: |
+        This endpoint returns a list of characters that the user has selected as "My AI Friends" characters.
+      operationId: selected_characters
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectedCharactersResponse'
+        '401':
+          description: The user must be authenticated.
+        '500':
+          description: Internal server error
+  /joules:
+    get:
+      tags:
+        - Joules
+      summary: Get user joule balance and patron tier
+      description: |
+        Returns the user's current joule balance and their patron tier.
+        If the user is not a patron, patron_tier will be an empty string.
+      operationId: get_joules
+      responses:
+        '200':
+          description: Successfully retrieved joule information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoulesResponse'
+        '401':
+          description: The user must be authenticated.
+        '500':
+          description: Internal server error
+  /npcs/responses:
+    x-ogen-operation-group: NPC
+    get:
+      tags:
+        - NPC
+      summary: Get real-time NPC chat responses
+      operationId: npc_chat_stream
+      description: |
+        Establishes a persistent connection to receive real-time responses from all your NPCs. This endpoint supports both Server-Sent Events (SSE) and newline-delimited JSON streaming based on the `Accept` header.
+
+        ## Content Types
+
+        - **`application/json`**: Returns newline-delimited JSON responses
+        - **`text/event-stream`**: Returns Server-Sent Events following the EventSource specification
+
+        ## How It Works
+
+        - **Keep the connection open**: This endpoint is designed for long-lived connections during active gameplay
+        - **Automatic routing**: Each response includes an `npc_id` so you can route replies to the correct NPC
+        - **Multiple response types**: Responses can contain text messages, function calls, and/or audio data
+        - **Automatic play tracking**: While connected, your play time is automatically tracked (no need to ping `/health`)
+
+        ## Response Formats
+
+        ### JSON Format (application/json)
+        Each line in the stream contains a complete JSON object:
+        ```json
+        {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Ahoy there, matey!", "audio": {...}, "command": null, "error": null}
+        {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": [{"name": "set_weather", "arguments": {"condition": "stormy"}}], "error": null}
+        ```
+
+        ### EventSource Format (text/event-stream)
+        Follows the EventSource specification with `id:`, `event:`, and `data:` fields:
+        ```
+        id: 1
+        event: npc_response
+        data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Ahoy there, matey!", "audio": {...}, "command": null, "error": null}
+
+        id: 2
+        event: npc_response
+        data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": [{"name": "set_weather", "arguments": {"condition": "stormy"}}], "error": null}
+
+        event: ping
+        data: {"type": "ping"}
+        ```
+
+        **Note**: Ping events are sent every 15 seconds to keep connections alive. They have no `id` field and are automatically filtered out for `application/json` clients.
+
+        ## Integration Tips
+
+        - **JSON Format**: Parse each line as separate JSON (newline-delimited JSON format)
+        - **EventSource Format**: Use the browser's EventSource API or equivalent SSE client
+        - Handle connection drops gracefully and reconnect as needed
+        - Buffer responses if your game loop can't process them immediately
+        - Use the `npc_id` to update the correct character's dialogue in your UI
+        - **Error Handling**: Check the `error` field in each response. When present, display the error message to users and handle accordingly:
+          - `insufficient_credits`: Show users they need to top up their AI power in the Player2 app
+          - `service_unavailable`: Inform users the service is temporarily down and to try again later
+          - `rate_limited`: Implement backoff and retry logic based on `retry_after` value
+
+        ## Examples
+
+        ### JSON Streaming
+        ```bash
+        curl -X GET "https://api.player2.game/v1/npcs/responses" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Accept: application/json" \
+          -N --http2
+        ```
+
+        ### EventSource/SSE
+        ```bash
+        curl -X GET "https://api.player2.game/v1/npcs/responses" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Accept: text/event-stream" \
+          -N --http2
+        ```
+
+        ```javascript
+        // Browser EventSource example
+        const eventSource = new EventSource('/npcs/responses', {
+          headers: { 'Authorization': 'Bearer YOUR_TOKEN' }
+        });
+        eventSource.addEventListener('npc_response', (event) => {
+          const data = JSON.parse(event.data);
+          console.log('NPC Response:', data);
+        });
+        ```
+      parameters:
+        - name: Accept
+          in: header
+          required: false
+          schema:
+            type: string
+            enum: ["application/json", "text/event-stream"]
+            default: "application/json"
+          description: |
+            Content type for the response stream:
+            - `application/json`: Newline-delimited JSON streaming
+            - `text/event-stream`: Server-Sent Events following EventSource specification
+      responses:
+        '200':
+          description: |
+            Successful connection established. Response format depends on the Accept header:
+            - `application/json`: Newline-delimited JSON streaming with each line containing a complete NpcApiChatResponse object
+            - `text/event-stream`: Server-Sent Events following EventSource specification with JSON data in the data: field
+          content:
+            application/json:
+              x-ogen-json-streaming: true
+              schema:
+                "$ref": "#/components/schemas/NpcApiChatResponse"
+                format: binary
+              examples:
+                text_response:
+                  summary: "Text message from NPC"
+                  value: |
+                    {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Ahoy there, adventurer! The treasure ye seek lies beyond the stormy seas.", "audio": null, "command": null, "error": null}
+                function_call:
+                  summary: "NPC executing a function"
+                  value: |
+                    {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": [{"name": "set_weather", "arguments": {"condition": "stormy"}}], "error": null}
+                text_with_audio:
+                  summary: "Text message with TTS audio"
+                  value: |
+                    {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Welcome to me ship!", "audio": {"data": "base64-encoded-audio-data"}, "command": null, "error": null}
+                insufficient_credits_error:
+                  summary: "Error response when user runs out of AI power"
+                  value: |
+                    {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": null, "error": {"error_code": "insufficient_credits", "error_message": "Insufficient AI power for completing the request. Get more AI power from https://player2.game/profile/ai-power.", "retry_after": null}}
+                service_unavailable_error:
+                  summary: "Error response when AI service is temporarily unavailable"
+                  value: |
+                    {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": null, "error": {"error_code": "service_unavailable", "error_message": "AI service is temporarily unavailable. Please try again in a few moments.", "retry_after": 30}}
+            text/event-stream:
+              schema:
+                type: string
+                format: binary
+                description: |
+                  Server-Sent Events stream following EventSource specification. Events include:
+
+                  **NPC Response Events:**
+                  - `id`: Unique event identifier (incremental integer)
+                  - `event`: Event type ("npc_response")
+                  - `data`: JSON-encoded NpcApiChatResponse object (same format as application/json)
+
+                  **Ping Events (sent every 15 seconds):**
+                  - `event`: Event type ("ping")
+                  - `data`: JSON object `{"type": "ping"}`
+                  - No `id` field (ping events don't need IDs)
+              examples:
+                text_response:
+                  summary: "Text message from NPC in EventSource format"
+                  value: |
+                    id: 1
+                    event: npc_response
+                    data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Ahoy there, adventurer! The treasure ye seek lies beyond the stormy seas.", "audio": null, "command": null, "error": null}
+
+                function_call:
+                  summary: "NPC executing a function in EventSource format"
+                  value: |
+                    id: 2
+                    event: npc_response
+                    data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": [{"name": "set_weather", "arguments": {"condition": "stormy"}}], "error": null}
+
+                text_with_audio:
+                  summary: "Text message with TTS audio in EventSource format"
+                  value: |
+                    id: 3
+                    event: npc_response
+                    data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "Welcome to me ship!", "audio": {"data": "base64-encoded-audio-data"}, "command": null, "error": null}
+
+                insufficient_credits_error:
+                  summary: "Error response in EventSource format"
+                  value: |
+                    id: 4
+                    event: npc_response
+                    data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": null, "error": {"error_code": "insufficient_credits", "error_message": "Insufficient AI power for completing the request. Get more AI power from https://player2.game/profile/ai-power.", "retry_after": null}}
+
+                service_unavailable_error:
+                  summary: "Service unavailable error in EventSource format"
+                  value: |
+                    id: 5
+                    event: npc_response
+                    data: {"npc_id": "123e4567-e89b-12d3-a456-426614174000", "message": "", "audio": null, "command": null, "error": {"error_code": "service_unavailable", "error_message": "AI service is temporarily unavailable. Please try again in a few moments.", "retry_after": 30}}
+
+                ping_event:
+                  summary: "Ping event sent every 15 seconds to keep connection alive"
+                  value: |
+                    event: ping
+                    data: {"type": "ping"}
+        '401':
+          description: Authentication required - provide a valid Bearer token
+        '429':
+          description: Rate limit exceeded - too many concurrent connections
+        '500':
+          description: Internal server error - try reconnecting after a brief delay
+  /npcs/spawn:
+    x-ogen-operation-group: NPC
+    post:
+      tags:
+      - NPC
+      summary: "Spawn a new AI-powered NPC"
+      description: |
+        Creates a new Non-Player Character with a unique personality, voice, and set of capabilities. The NPC will maintain its own conversation history and can respond to player messages, execute custom functions, and provide text-to-speech audio responses.
+
+        ## What You Can Configure
+
+        - **Personality & Behavior**: Define the character's description and system instructions
+        - **Voice**: Choose from available text-to-speech voices for audio responses
+        - **Custom Functions**: Give the NPC abilities to interact with your game world
+        - **Conversation Persistence**: Control whether game state is remembered between messages
+
+        ## Function Capabilities
+
+        NPCs can execute custom functions in your game, such as:
+        - Modifying game state (weather, time, inventory)
+        - Triggering events or cutscenes
+        - Providing game information (quests, locations, items)
+        - Controlling other game systems
+
+        Each function can optionally prevent the NPC from sending a text response, useful for silent actions.
+
+        ## Example Usage
+
+        ```bash
+        curl -X POST "https://api.player2.game/v1/npcs/spawn" \
+          -H "Authorization: Bearer YOUR_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "Merlin the Wise",
+            "short_name": "Merlin",
+            "character_description": "An ancient wizard with vast knowledge of magic and the realm",
+            "system_prompt": "You are Merlin, a wise and helpful wizard. Speak with wisdom and offer magical assistance to worthy adventurers. You can cast spells to help players.",
+            "tts": {
+              "voice_ids": ["21m00Tcm4TlvDq8ikWAM"],
+              "speed": 0.9,
+              "audio_format": "mp3",
+              "voice_gender": "male"
+            },
+            "keep_game_state": true,
+            "commands": [
+              {
+                "name": "cast_spell",
+                "description": "Cast a magical spell with various effects",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "spell_name": {
+                      "type": "string",
+                      "description": "Name of the spell to cast"
+                    },
+                    "target": {
+                      "type": "string",
+                      "description": "Target of the spell (player, enemy, environment)"
+                    }
+                  },
+                  "required": ["spell_name"]
+                },
+                "never_respond_with_message": false
+              }
+            ]
+          }'
+        ```
+
+        ## Response
+
+        Returns a UUID that uniquely identifies your new NPC. Use this ID for all subsequent interactions.
+
+      operationId: create_ai_npc
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/SpawnNPC"
+        required: true
+      responses:
+        '200':
+          description: |
+            NPC successfully created. The response contains the unique identifier for your new NPC.
+            Use this UUID for sending messages, receiving responses, and eventually removing the NPC.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+                description: "Unique identifier for the newly created NPC"
+              example: "123e4567-e89b-12d3-a456-426614174000"
+        '400':
+          description: Invalid request - check your character configuration and function definitions
+        '401':
+          description: Authentication required - provide a valid Bearer token
+        '429':
+          description: Rate limit exceeded - too many NPCs created recently
+        '500':
+          description: Internal server error - please try again
+  /npcs/{npc_id}/chat:
+    x-ogen-operation-group: NPC
+    post:
+      tags:
+      - NPC
+      summary: "Send message to an NPC"
+      description: |
+        Sends a player’s message to an NPC that you previously spawned with `/npcs/spawn`.
+
+        - Provide the `npc_id` of the target NPC in the path.
+        - The request includes the player’s name, message, and optional game state info.
+        - You can also specify TTS options so responses come back with audio.
+      operationId: npc_chat
+      parameters:
+      - name: npc_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: "UUID of the NPC to send the message to (returned from /npcs/spawn)"
+        example: "123e4567-e89b-12d3-a456-426614174000"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/NpcChatCompletionRequest"
+        required: true
+      responses:
+        '200':
+          description: |
+            Message successfully received and queued for processing. The NPC will generate a response that will be streamed to the `/npcs/responses` endpoint.
+            Listen to that endpoint to receive the NPC's reply.
+        '404':
+          description: NPC not found - the specified npc_id does not exist or has been deleted
+        '401':
+          description: Authentication required - provide a valid Bearer token
+        '429':
+          description: Rate limit exceeded - too many messages sent recently
+        '500':
+          description: Internal server error - please try again
+  /npcs/{npc_id}/kill:
+    x-ogen-operation-group: NPC
+    post:
+      tags:
+      - NPC
+      summary: "Remove an NPC"
+      description: |
+        Permanently removes an NPC from the system, including all its conversation history, personality state, and any associated data. This action cannot be undone.
+
+        ## What Gets Deleted
+
+        - **NPC identity and configuration**: Name, personality, voice settings, and functions
+        - **Conversation history**: All past messages and interactions with players
+        - **Internal state**: Any learned behaviors or temporary memory
+        - **Pending responses**: Any queued but undelivered messages from this NPC
+
+        ## When to Use
+
+        - **End of gameplay session**: Clean up NPCs when players disconnect or finish playing
+        - **Character lifecycle**: Remove NPCs that are no longer relevant to the story
+        - **Resource management**: Free up resources by removing unused NPCs
+        - **Privacy compliance**: Ensure player conversation data is deleted when requested
+
+        ## Important Notes
+
+        - This action is **irreversible** - you cannot recover the NPC or its data after deletion
+        - Any pending messages from this NPC will be discarded
+        - The `npc_id` becomes invalid and cannot be reused
+        - No further responses will be generated from this NPC
+
+        ## Example Usage
+
+        ```bash
+        curl -X POST "https://api.player2.game/v1/npcs/{npc_id}/kill" \
+          -H "Authorization: Bearer YOUR_TOKEN"
+        ```
+      operationId: kill_npc
+      parameters:
+      - name: npc_id
+        description: "UUID of the NPC to remove (returned from /npcs/spawn)"
+        example: "123e4567-e89b-12d3-a456-426614174000"
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: |
+            NPC successfully removed. The NPC and all its associated data have been permanently deleted.
+            The npc_id is now invalid and cannot be used for further operations.
+        '404':
+          description: NPC not found - the specified npc_id does not exist or has already been deleted
+        '401':
+          description: Authentication required - provide a valid Bearer token
+        '500':
+          description: Internal server error - please try again
+components:
+  schemas:
+    AssistantMessage:
+      type: object
+      description: Assistant message in the response
+      required:
+        - role
+      properties:
+        content:
+          oneOf:
+            - type: string
+            - type: 'null'
+          description: The content of the message
+        role:
+          $ref: '#/components/schemas/Role'
+          description: The role of the message author (always "assistant" for responses)
+        tool_calls:
+          oneOf:
+          - type: array
+            items:
+              $ref: '#/components/schemas/ToolCall'
+          - type: 'null'
+          description: Tool calls made by the model, if any
+    AudioFormat:
+      type: string
+      enum:
+        - mp3
+        - opus
+        - flac
+        - wav
+        - pcm
+    Character:
+      type: object
+      description: Character
+      required:
+        - id
+        - name
+        - description
+        - greeting
+        - voice_ids
+        - short_name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        short_name:
+          type: string
+        description:
+          type: string
+        greeting:
+          type: string
+        voice_ids:
+          type: array
+          items:
+            type: string
+        meta:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/CharacterMetadata'
+              description: Character meta
+
+    CharacterMinecraftMeta:
+      type: object
+      description: Character Minecraft meta
+      required:
+        - skin_url
+      properties:
+        skin_url:
+          type: string
+          description: The URL of the skin
+    CharacterMinecraftMetaTagged:
+      allOf:
+        - $ref: '#/components/schemas/CharacterMinecraftMeta'
+        - type: object
+          required:
+            - type
+          properties:
+            type:
+              type: string
+              enum:
+                - Minecraft
+    CharacterMetadata:
+      description: Character meta
+      oneOf:
+        - $ref: '#/components/schemas/CharacterMinecraftMetaTagged'
+    JoulesResponse:
+      type: object
+      description: User joules and patron tier information
+      required:
+        - joules
+        - patron_tier
+      properties:
+        joules:
+          type: integer
+          description: User's joule balance
+          example: 150
+        patron_tier:
+          type: string
+          description: User's patron tier (empty string if not a patron)
+          enum: ["", "Patron Basic", "Patron", "Patron VIP", "Patron VVIP"]
+          example: "Patron"
+    ChatCompletion:
+      type: object
+      description: Chat completion response
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Choice'
+          description: A list of chat completion choices
+        created:
+          type: integer
+          format: int64
+          description: The Unix timestamp (in seconds) when the chat completion was created
+        id:
+          type: string
+          description: Unique identifier for the chat completion
+        model:
+          type: string
+          description: The model used for the chat completion
+        object:
+          type: string
+          description: The object type, which is always "chat.completion"
+        usage:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Usage'
+              description: Usage statistics for the completion request
+    ChatCompletionJSONResponse:
+      type: object
+      description: Chat completion response
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Choice'
+          description: A list of chat completion choices
+        created:
+          type: integer
+          format: int64
+          description: The Unix timestamp (in seconds) when the chat completion was created
+        id:
+          type: string
+          description: Unique identifier for the chat completion
+        model:
+          type: string
+          description: The model used for the chat completion
+        object:
+          type: string
+          description: The object type, which is always "chat.completion"
+        usage:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/Usage'
+              description: Usage statistics for the completion request
+    ChatCompletionStreamingResponse:
+      type: string
+    ChatCompletionRequest:
+      type: object
+      description: Chat completion request
+      required:
+        - messages
+      properties:
+        max_tokens:
+          oneOf:
+            - type: integer
+              format: int32
+            - type: 'null'
+          description: The maximum number of tokens to generate in the completion
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+          description: Messages to complete
+        stream:
+          oneOf:
+            - type: boolean
+            - type: 'null'
+          description: Whether to stream the response (used for documentation, actual streaming determined by endpoint)
+        temperature:
+          oneOf:
+            - type: number
+            - type: 'null'
+          format: float
+          description: |-
+            What sampling temperature to use, between 0 and 2.
+            Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic.
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: 'null'
+          description: Controls how the model uses tools
+        tools:
+          oneOf:
+            - type: array
+              items:
+                $ref: '#/components/schemas/Tool'
+            - type: 'null'
+          description: Optional tools the model may call
+    Choice:
+      type: object
+      description: Choice in the chat completion response
+      required:
+        - index
+        - message
+        - finish_reason
+      properties:
+        finish_reason:
+          type: string
+          description: The reason the model stopped generating tokens
+        index:
+          type: integer
+          format: int32
+          description: The index of the choice in the list of choices
+        message:
+          $ref: '#/components/schemas/AssistantMessage'
+          description: The message generated by the model
+    Chunk:
+      type: object
+      description: |-
+        Chunk for streaming responses from LLMStreamProxy
+
+        This struct represents chunks received from the LLMStreamProxy gRPC API.
+        Each chunk contains raw data that should be written to the HTTP response as "data: {raw}"
+        When done=true, this indicates the final chunk and the connection should be closed.
+      required:
+        - raw
+        - done
+      properties:
+        done:
+          type: boolean
+          description: Whether this is the final chunk - when true, close the connection
+        raw:
+          type: string
+          description: 'Raw data to be sent in the SSE stream as "data: {raw}"'
+    ContentBlock:
+      oneOf:
+        - allOf:
+            - $ref: '#/components/schemas/TextContent'
+              description: Text content block
+            - type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - text
+          description: Text content block
+        - allOf:
+            - $ref: '#/components/schemas/ImageUrlContent'
+              description: Image URL content block
+            - type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - image_url
+          description: Image URL content block
+      description: Content block for mixed content messages
+    Function:
+      type: object
+      description: Function definition for a tool
+      required:
+        - name
+        - description
+        - parameters
+      properties:
+        description:
+          type: string
+          description: Description of what the function does
+        name:
+          type: string
+          description: The name of the function
+        parameters:
+          $ref: '#/components/schemas/Parameters'
+          description: Parameters the function accepts
+        never_respond_with_message:
+          type: boolean
+          description: |
+            Controls whether the NPC should provide a text response when calling this function.
+            - `true`: Function is executed silently without any accompanying text message (useful for background actions)
+            - `false`: Function is executed and the NPC may also provide a text response explaining the action
+          example: false
+    FunctionCall:
+      type: object
+      description: Function call by the model
+      required:
+        - name
+        - arguments
+      properties:
+        arguments:
+          type: string
+          description: The arguments to pass to the function, JSON encoded
+        name:
+          type: string
+          description: The name of the function to call
+    SpeechGender:
+      type: string
+      enum:
+        - male
+        - female
+        - other
+    HealthResponse:
+      type: object
+      description: Health response
+    ImageUrl:
+      type: object
+      description: Image URL details
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: The URL of the image (can be data URI or HTTP URL)
+    ImageUrlContent:
+      type: object
+      description: Image URL content block
+      required:
+        - image_url
+      properties:
+        image_url:
+          $ref: '#/components/schemas/ImageUrl'
+          description: 'Inline image data, following the format: data:image/<format>;base64,<data>'
+    LoginDeviceNewRequest:
+      type: object
+      description: Request to create a new device login
+      required:
+        - client_id
+      properties:
+        client_id:
+          type: string
+          description: The Game Client ID. Find this in the Developer Dashboard.
+    LoginDeviceNewResponse:
+      type: object
+      description: Response to a new device login
+      required:
+        - deviceCode
+        - userCode
+        - verificationUri
+        - verificationUriComplete
+        - expiresIn
+        - interval
+      properties:
+        deviceCode:
+          type: string
+          description: The device code you will use to poll for the api key.
+        expiresIn:
+          type: integer
+          description: The number of seconds until the device code expires.
+        interval:
+          type: integer
+          description: The number of seconds between polling for the api key. You will receive a failure response if you poll too frequently.
+        userCode:
+          type: string
+          description: The code the user may need to type in to approve access.
+        verificationUri:
+          type: string
+          description: The verification URI you should redirect the user to to approve access.
+        verificationUriComplete:
+          type: string
+          description: The complete verification URI you should redirect the user to to approve access. This full URI will have the site's
+            `userCode automatically filled in.
+    LoginDeviceTokenRequest:
+      type: object
+      description: Request to exchange a device code for a P2 API key. You should poll this endpoint at fixed interval provided by the device code request.
+      required:
+        - client_id
+        - device_code
+        - grant_type
+      properties:
+        client_id:
+          type: string
+          description: The Game Client ID. Must match the Game Client ID that requested the device code.
+        device_code:
+          type: string
+          description: The device code received from the initial device code request.
+        grant_type:
+          type: string
+          description: The grant type. Must be equal to `urn:ietf:params:oauth:grant-type:device_code`
+    LoginDeviceTokenResponse:
+      type: object
+      description: Response to a device code exchange request.
+      required:
+        - p2Key
+      properties:
+        p2Key:
+          type: string
+          description: The API key to use in the game. You must use the key in the Authorization header of your requests to the API with value `Bearer <p2Key>`.
+    LoginAuthorizationCodeTokenRequest:
+      type: object
+      description: Request to exchange an authorization code for a P2 API key using OAuth2 Authorization Code flow with PKCE.
+      required:
+        - grant_type
+        - code
+        - redirect_uri
+        - client_id
+        - code_verifier
+      properties:
+        grant_type:
+          type: string
+          description: The grant type. Must be equal to `authorization_code`
+          example: authorization_code
+        code:
+          type: string
+          description: The authorization code received from the authorization server.
+        redirect_uri:
+          type: string
+          description: The redirect URI that was used in the authorization request. Must match exactly.
+        client_id:
+          type: string
+          description: The Game Client ID. Must match the Game Client ID that was used in the authorization request.
+        code_verifier:
+          type: string
+          description: |
+            The original code verifier that was used to generate the code_challenge in the authorization request.
+            This must be the same cryptographically random string (43-128 characters) that you generated before starting the authorization flow.
+            The server will hash this verifier and compare it against the code_challenge you provided earlier to verify the request's authenticity.
+          example: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    LoginAuthorizationCodeTokenResponse:
+      type: object
+      description: Response to an authorization code exchange request.
+      required:
+        - p2Key
+      properties:
+        p2Key:
+          type: string
+          description: The API key to use in the game. You must use the key in the Authorization header of your requests to the API with value `Bearer <p2Key>`.
+    Message:
+      type: object
+      description: Message object
+      required:
+        - role
+        - content
+      properties:
+        content:
+          $ref: '#/components/schemas/MessageContent'
+          description: Content of the message - can be a string or array of content blocks
+        role:
+          $ref: '#/components/schemas/Role'
+          description: Role of the message, must be one of "user", "assistant", "system", "developer"
+        tool_call_id:
+          oneOf:
+            - type: string
+            - type: 'null'
+          description: Tool call ID, if the message is a tool call response
+        tool_calls:
+          oneOf:
+            - type: array
+              items:
+                $ref: '#/components/schemas/ToolCall'
+            - type: 'null'
+          description: Tool calls, if the message is a tool call request
+    MessageContent:
+      oneOf:
+        - type: string
+          description: Simple text content (for backward compatibility)
+        - type: array
+          items:
+            $ref: '#/components/schemas/ContentBlock'
+          description: Array of content blocks (text, images, etc.)
+      description: Message content that can be either a string or an array of content blocks
+    Parameters:
+      type: object
+      description: Parameters for a function, matching the Go structure
+      required:
+        - type
+        - properties
+      properties:
+        properties:
+          type: object
+          description: Properties of the parameters
+          additionalProperties:
+            $ref: '#/components/schemas/Property'
+          propertyNames:
+            type: string
+        required:
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: 'null'
+          description: List of required properties
+        type:
+          type: string
+          description: Type of the parameters object
+    Property:
+      type: object
+      description: Property definition for parameters, following JSON Schema specification
+      properties:
+        type:
+          type: string
+          description: The type of the property (e.g., string, number, object, array)
+        description:
+          type: string
+          description: A description of the property
+        enum:
+          type: array
+          items:
+            type: string
+          description: List of allowed values for the property
+        items:
+          type: object
+          description: Schema for array items (when type is array)
+        properties:
+          type: object
+          description: Nested properties (when type is object)
+          additionalProperties:
+            $ref: '#/components/schemas/Property'
+        required:
+          type: array
+          items:
+            type: string
+          description: List of required properties (when type is object)
+        minimum:
+          type: number
+          description: Minimum value for numeric types
+        maximum:
+          type: number
+          description: Maximum value for numeric types
+        format:
+          type: string
+          description: String format hint (e.g., date-time, email, uri)
+      additionalProperties: true
+    RequestError:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Error message
+    Role:
+      type: string
+      enum:
+        - user
+        - assistant
+        - system
+        - developer
+        - tool
+    SelectedCharactersResponse:
+      type: object
+      description: Response to a selected characters request
+      required:
+        - characters
+      properties:
+        characters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Character'
+          description: List of characters
+    TextContent:
+      type: object
+      description: Text content block
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: The text content
+    Tool:
+      type: object
+      description: Tool that can be called by the model
+      required:
+        - type
+        - function
+      properties:
+        function:
+          $ref: '#/components/schemas/Function'
+          description: Function definition
+        type:
+          type: string
+          description: Type of the tool, currently only "function" is supported
+          # pattern: ^(function)$
+    ToolCall:
+      type: object
+      description: Tool call by the model
+      required:
+        - function
+      properties:
+        function:
+          $ref: '#/components/schemas/FunctionCall'
+          description: Function call details
+        id:
+          oneOf:
+            - type: string
+            - type: 'null'
+          description: Unique ID for this tool call
+        type:
+          oneOf:
+            - type: string
+            - type: 'null'
+          description: Type of the tool call, currently only "function" is supported
+    TTSSpeakRequest:
+      type: object
+      description: Request to speak a text
+      required:
+        - text
+        - speed
+        - audio_format
+      properties:
+        text:
+          type: string
+          description: The text to speak
+          example: "Hello, how are you?"
+        voice_ids:
+          type: array
+          description: |
+            Voice ids to use. If not provided, the default voice for the language and gender will be used.
+            If providing more than one voice, the voices will be mixed together.
+          items:
+            type: string
+        speed:
+          type: number
+          format: double
+          minimum: 0.25
+          maximum: 4.0
+          description: Speed of the speech
+        audio_format:
+          type: string
+          enum:
+            - mp3
+            - opus
+            - flac
+            - wav
+            - pcm
+          description: The format of the audio
+        voice_gender:
+          $ref: '#/components/schemas/SpeechGender'
+          description: The gender of the default voice to use if no voice_ids are provided.
+        voice_language:
+          type: string
+          description: The language of the default voice to use if no voice_ids are provided.
+          enum:
+            - en_US
+            - en_GB
+            - ja_JP
+            - zh_CN
+            - es_ES
+            - fr_FR
+            - hi_IN
+            - it_IT
+            - pt_BR
+    TTSStreamRequest:
+      type: object
+      description: Request to stream text-to-speech audio (supports only WAV and MP3 formats)
+      required:
+        - text
+        - speed
+        - audio_format
+      properties:
+        text:
+          type: string
+          description: The text to speak
+          example: "Hello, how are you?"
+        voice_ids:
+          type: array
+          description: |
+            Voice ids to use. If not provided, the default voice for the language and gender will be used.
+            If providing more than one voice, the voices will be mixed together.
+          items:
+            type: string
+        speed:
+          type: number
+          format: double
+          minimum: 0.25
+          maximum: 4.0
+          description: Speed of the speech
+        audio_format:
+          type: string
+          enum:
+            - mp3
+            - wav
+          description: The format of the streaming audio (only WAV and MP3 supported for streaming)
+        voice_gender:
+          $ref: '#/components/schemas/SpeechGender'
+          description: The gender of the default voice to use if no voice_ids are provided.
+        voice_language:
+          type: string
+          description: The language of the default voice to use if no voice_ids are provided.
+          enum:
+            - en_US
+            - en_GB
+            - ja_JP
+            - zh_CN
+            - es_ES
+            - fr_FR
+            - hi_IN
+            - it_IT
+            - pt_BR
+    TTSSpeakResponse:
+      type: object
+      description: Response to a TTS speak request
+      required:
+        - data
+      properties:
+        data:
+          type: string
+          description: The audio data in base64 format
+    TTSVoicesResponse:
+      type: object
+      description: Response to a TTS voices request
+      required:
+        - voices
+      properties:
+        voices:
+          type: array
+          items:
+            $ref: '#/components/schemas/TTSVoice'
+          description: List of all available TTS voices
+    TTSVoice:
+      type: object
+      description: TTS voice
+      required:
+        - id
+        - name
+        - language
+        - gender
+      properties:
+        id:
+          type: string
+          description: The ID of the voice
+        name:
+          type: string
+          description: The name of the voice
+        language:
+          type: string
+          description: The language of the voice
+        gender:
+          $ref: '#/components/schemas/SpeechGender'
+    Usage:
+      type: object
+      description: Usage statistics for the completion request
+      required:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+      properties:
+        completion_tokens:
+          type: integer
+          format: int64
+          description: Number of tokens in the generated completion
+        prompt_tokens:
+          type: integer
+          format: int64
+          description: Number of tokens in the input
+        total_tokens:
+          type: integer
+          format: int64
+          description: Total number of tokens used (prompt + completion)
+    NpcChatCompletionRequest:
+      type: object
+      description: "Request to send a message to an NPC"
+      required:
+        - sender_name
+        - sender_message
+      properties:
+        game_state_info:
+          nullable: true
+          type: string
+          description: |
+            Optional contextual information about the current state of your game world. This helps the NPC provide more relevant and immersive responses.
+            Include details like location, weather, time of day, nearby objects or characters, player inventory, quest status, or any other relevant context.
+            The more specific and detailed this information, the better the NPC can tailor its response to the situation.
+          example: "Player is in the Mystic Forest at dusk. It's raining lightly. Player has a magic sword and 150 gold. Current quest: Find the Crystal of Power. A mysterious owl is perched nearby watching."
+        sender_message:
+          type: string
+          description: |
+            The message content from the player to the NPC. This can be dialogue, questions, commands, or any other form of communication.
+            The NPC will respond based on its personality, the message content, and any provided game state context.
+          example: "Hello, wise sage! I'm on a quest to find the Crystal of Power. Do you know where I might find it?"
+        sender_name:
+          type: string
+          description: |
+            The name or identifier of the player sending the message. The NPC will use this to personalize responses and maintain conversational context.
+            Can be a character name, username, or any identifier that makes sense in your game context.
+          example: "Alex the Adventurer"
+        tts:
+          nullable: true
+          "$ref": "#/components/schemas/NpcTTS"
+          description: |
+            Specifies how text-to-speech audio should be handled for the NPC's response.
+            - `"server"`: Audio is generated on our servers and returned as base64-encoded data
+            - `null`: No audio generation - text response only
+      example:
+        game_state_info: The weather is currently 30°C, it may be appropriate to call
+          the "cool the weather" function
+        sender_message: Hello, how are you doing today?
+        sender_name: John
+    NpcApiChatResponse:
+      type: object
+      description: |
+        Response from an NPC containing text message, optional audio, and/or function calls.
+        This is the format of responses streamed through the `/npcs/responses` endpoint.
+      required:
+      - npc_id
+      - message
+      properties:
+        audio:
+          oneOf:
+          - type: 'null'
+          - "$ref": "#/components/schemas/SingleTextToSpeechData"
+          description: |
+            Optional audio data for the NPC's response. Present only if TTS was requested in the original message.
+            Contains base64-encoded audio data ready for playback.
+        command:
+          oneOf:
+          - type: array
+            items:
+              "$ref": "#/components/schemas/FunctionCall"
+          - type: 'null'
+          description: |
+            Optional array of function calls that the NPC wants to execute. These represent actions the NPC is taking in your game world.
+            Your game should process these function calls and apply their effects. Functions can modify game state, trigger events, or perform other actions.
+        error:
+          oneOf:
+          - type: 'null'
+          - "$ref": "#/components/schemas/NpcApiError"
+          description: |
+            Optional error information when the NPC cannot process a request due to system issues.
+            When present, indicates that the NPC encountered an error and cannot provide a normal response.
+        message:
+          type: string
+          description: |
+            The text response from the NPC. This is the conversational content that should be displayed to the player.
+            May be empty if the NPC is only executing functions without providing a text response, or if an error occurred.
+          example: "Ahoy there, brave adventurer! I've heard tales of the Crystal of Power. *adjusts weather to be more favorable* The path lies through the Misty Mountains, but beware of the ancient guardians!"
+        npc_id:
+          type: string
+          format: uuid
+          description: |
+            The unique identifier of the NPC that generated this response. Use this to route the response to the correct character in your game.
+            This matches the UUID returned when the NPC was spawned.
+          example: "123e4567-e89b-12d3-a456-426614174000"
+    NpcApiError:
+      type: object
+      description: |
+        Error information for NPC API responses when system errors occur.
+        Provides structured error details to help developers handle different error conditions.
+      required:
+      - error_code
+      - error_message
+      properties:
+        error_code:
+          type: string
+          enum: ["insufficient_credits", "service_unavailable", "rate_limited", "internal_error"]
+          description: |
+            Machine-readable error code indicating the type of error that occurred.
+            - `insufficient_credits`: User has run out of AI power/credits and needs to top up their account
+            - `service_unavailable`: The AI service is temporarily unavailable
+            - `rate_limited`: Too many requests have been made in a short time period
+            - `internal_error`: An unexpected system error occurred
+          example: "insufficient_credits"
+        error_message:
+          type: string
+          description: |
+            Human-readable error message providing details about the error.
+            This message can be displayed to users to explain what went wrong and how to resolve it.
+          example: "Insufficient AI power for completing the request. Get more AI power from https://player2.game/profile/ai-power."
+        retry_after:
+          oneOf:
+          - type: integer
+          - type: 'null'
+          description: |
+            Optional number of seconds to wait before retrying the request.
+            Present for rate_limited and service_unavailable errors.
+          example: 60
+    NpcFunction:
+      allOf:
+      - "$ref": "#/components/schemas/Function"
+      - type: object
+        description: |
+          Defines a custom function that an NPC can execute to interact with your game world.
+          Extends the base Function schema with NPC-specific behavior controls.
+        properties: {}
+    SingleTextToSpeechData:
+      type: object
+      description: Single Text to Speech Data
+      required:
+      - data
+      properties:
+        data:
+          type: string
+          description: Base64 encoded audio data
+    NpcTTSConfig:
+      type: object
+      description: |
+        Text-to-speech configuration for an NPC. This defines how the NPC's responses should be converted to audio.
+        All fields from TTSSpeakRequest except 'text' are supported, allowing full control over voice characteristics.
+      required:
+      - speed
+      - audio_format
+      properties:
+        voice_ids:
+          type: array
+          description: |
+            Voice ids to use for this NPC. If not provided, the default voice for the language and gender will be used.
+            If providing more than one voice, the voices will be mixed together.
+          items:
+            type: string
+          example: ["21m00Tcm4TlvDq8ikWAM"]
+        speed:
+          type: number
+          format: double
+          minimum: 0.25
+          maximum: 4.0
+          description: Speed of the speech for this NPC
+          example: 1.0
+        audio_format:
+          type: string
+          enum:
+            - mp3
+            - opus
+            - flac
+            - wav
+            - pcm
+          description: The audio format for this NPC's responses
+          example: "mp3"
+        voice_gender:
+          $ref: '#/components/schemas/SpeechGender'
+          description: The gender of the default voice to use if no voice_ids are provided
+        voice_language:
+          type: string
+          description: The language of the default voice to use if no voice_ids are provided
+          enum:
+            - en_US
+            - en_GB
+            - ja_JP
+            - zh_CN
+            - es_ES
+            - fr_FR
+            - hi_IN
+            - it_IT
+            - pt_BR
+          example: "en_US"
+    SpawnNPC:
+      type: object
+      required:
+      - short_name
+      - name
+      - character_description
+      - system_prompt
+      - tts
+      properties:
+        character_description:
+          type: string
+          description: |
+            A detailed description of your NPC's personality, background, and traits. This shapes how the AI will behave and respond to players.
+            Think of this as the character's "bio" - include their motivations, quirks, speaking style, and any unique characteristics.
+          example: "A weathered pirate captain with a thick accent who loves treasure hunting and telling tales of the sea. Known for being both cunning and surprisingly helpful to those who show respect."
+        commands:
+          oneOf:
+          - type: array
+            items:
+              "$ref": "#/components/schemas/NpcFunction"
+          - type: 'null'
+
+          description: |
+            An optional array of custom functions/commands that your NPC can execute. These allow the NPC to interact with your game world beyond just conversation.
+            Each function should have a clear purpose and well-defined parameters. The NPC will intelligently decide when to call these functions based on the conversation context.
+        keep_game_state:
+          oneOf:
+          - type: boolean
+          - type: 'null'
+          description: |
+            Controls whether game state information is preserved in the NPC's conversation history.
+            - `true` (default): Game state context is remembered across conversations for continuity
+            - `false`: Each conversation starts fresh without previous game state context
+            - `null`: Uses system default behavior
+        name:
+          type: string
+          description: |
+            The complete, formal name of your character. This is used for identification and can be referenced in conversations.
+            Use a name that fits your game's setting and the character's background.
+          example: "Captain Blackbeard McReynolds"
+        short_name:
+          type: string
+          description: |
+            A shorter version of the character's name, typically used in UI elements like chat bubbles or character lists.
+            This should be easy to read and recognize at a glance.
+          example: "Captain"
+        system_prompt:
+          type: string
+          description: |
+            Core instructions that define how the AI should behave as this character. This is the most important field for shaping your NPC's personality and behavior.
+            Include guidelines for tone, knowledge areas, goals, and any specific rules the character should follow.
+          example: "You are Captain Blackbeard, a seasoned pirate with a heart of gold. Speak with a nautical accent and pirate terminology. Help players with their quests while sharing tales of your adventures. You're knowledgeable about sailing, treasure hunting, and sea monsters."
+        tts:
+          "$ref": "#/components/schemas/NpcTTSConfig"
+          description: |
+            Text-to-speech configuration for this NPC. Defines voice characteristics, speed, and audio format for when players request audio responses.
+            Use the [/tts/voices](#tag/Text-To-Speech/operation/tts_voices) endpoint to get available voice options and their IDs.
+        voice_id:
+          type: string
+          description: |
+            **Backward compatibility field for player2 app.**
+            Voice ID to use for this NPC. If both `voice_id` and `tts.voice_id` are provided, `tts.voice_id` takes precedence.
+            If `tts.voice_id` is empty, this field will be used instead.
+          example: "01955d76-ed5b-7451-92d6-5ef579d3ed28"
+      examples:
+      - character_description: A crazed scientist on the hunt for gold
+        commands:
+        - description: takes in a value, and modifies the weather by that many degrees
+            celcius
+          name: weather_modifier
+          parameters:
+            properties:
+              degrees:
+                description: The number of degrees to modify the weather by, can be
+                  negative or positive
+                type: integer
+            required:
+            - degrees
+            type: object
+          never_respond_with_message: false
+        name: Victor J. Johnson
+        short_name: Victor
+        system_prompt: Prompt
+        tts:
+          voice_ids: ["01955d76-ed5b-7451-92d6-5ef579d3ed28"]
+          speed: 1.0
+          audio_format: "mp3"
+    NpcTTS:
+      type: string
+      description: |
+        Specifies how text-to-speech audio should be generated and delivered for NPC responses.
+        Choose the option that best fits your application's architecture and bandwidth requirements.
+      enum:
+      - server
+      x-enum-descriptions:
+        server: "Audio is generated on our servers and returned as base64-encoded data. Recommended for most applications as it provides consistent quality and reduces client complexity."
+    # STT WebSocket Message Schemas
+    STTEnvelope:
+      type: object
+      description: WebSocket message envelope for STT events
+      required:
+        - type
+        - stream_id
+        - timestamp
+        - data
+      properties:
+        type:
+          type: string
+          enum: ["session", "open", "message", "speech_started", "utterance_end", "error", "close"]
+          description: Event type
+        stream_id:
+          type: string
+          description: Stream session identifier
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp in milliseconds
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/STTSessionEvent'
+            - $ref: '#/components/schemas/STTOpenEvent'
+            - $ref: '#/components/schemas/STTMessageEvent'
+            - $ref: '#/components/schemas/STTSpeechStartedEvent'
+            - $ref: '#/components/schemas/STTUtteranceEndEvent'
+            - $ref: '#/components/schemas/STTErrorEvent'
+            - $ref: '#/components/schemas/STTCloseEvent'
+          description: Event-specific data
+
+    STTSessionEvent:
+      type: object
+      description: Session establishment event
+      required:
+        - stream_id
+      properties:
+        stream_id:
+          type: string
+          description: Unique session identifier for reconnection
+
+    STTOpenEvent:
+      type: object
+      description: Transcriber connection opened event
+      properties:
+        type:
+          type: string
+          example: "Open"
+
+    STTMessageEvent:
+      type: object
+      description: Transcription result event (interim or final)
+      properties:
+        channel:
+          $ref: '#/components/schemas/STTChannel'
+        channel_index:
+          type: array
+          items:
+            type: integer
+        duration:
+          type: number
+          format: double
+        is_final:
+          type: boolean
+          description: Whether this is the final transcription result
+        from_finalize:
+          type: boolean
+        metadata:
+          $ref: '#/components/schemas/STTMetadata'
+        speech_final:
+          type: boolean
+        start:
+          type: number
+          format: double
+        type:
+          type: string
+
+    STTChannel:
+      type: object
+      description: Transcription channel data
+      properties:
+        alternatives:
+          type: array
+          items:
+            $ref: '#/components/schemas/STTAlternative'
+
+    STTAlternative:
+      type: object
+      description: Transcription alternative result
+      properties:
+        confidence:
+          type: number
+          format: double
+          description: Confidence score (0.0 to 1.0)
+        transcript:
+          type: string
+          description: Transcribed text
+        words:
+          type: array
+          items:
+            $ref: '#/components/schemas/STTWord'
+
+    STTWord:
+      type: object
+      description: Individual word with timing information
+      properties:
+        word:
+          type: string
+          description: The transcribed word
+        start:
+          type: number
+          format: double
+          description: Start time in seconds
+        end:
+          type: number
+          format: double
+          description: End time in seconds
+        confidence:
+          type: number
+          format: double
+          description: Confidence score for this word
+        speaker:
+          type: integer
+          description: Speaker identifier (when diarization is enabled)
+
+    STTMetadata:
+      type: object
+      description: Transcription metadata
+      properties:
+        request_id:
+          type: string
+        transaction_key:
+          type: string
+        sha256:
+          type: string
+        created:
+          type: string
+        duration:
+          type: number
+          format: double
+        channels:
+          type: integer
+
+    STTSpeechStartedEvent:
+      type: object
+      description: Voice activity detection - speech started
+      properties:
+        type:
+          type: string
+          example: "SpeechStarted"
+
+    STTUtteranceEndEvent:
+      type: object
+      description: End of utterance detected (silence after speech)
+      properties:
+        type:
+          type: string
+          example: "UtteranceEnd"
+
+    STTErrorEvent:
+      type: object
+      description: Error event from transcriber
+      required:
+        - err_code
+        - err_msg
+      properties:
+        type:
+          type: string
+          example: "Error"
+        err_code:
+          type: string
+          enum: ["CONNECTION_FAILED", "CONNECTION_TIMEOUT", "CONNECTION_LOST", "RECONNECT_FAILED", "AUTHENTICATION_FAILED", "INVALID_API_KEY", "UNAUTHORIZED", "INVALID_CONFIGURATION", "UNSUPPORTED_FORMAT", "INVALID_SAMPLE_RATE", "AUDIO_VALIDATION_ERROR", "BUFFER_OVERFLOW", "AUDIO_PROCESSING_ERROR", "RATE_LIMIT_EXCEEDED", "QUOTA_EXCEEDED", "SESSION_NOT_FOUND", "SESSION_EXPIRED", "SESSION_CLOSED", "INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "DEEPGRAM_ERROR"]
+          description: Specific error code
+        err_msg:
+          type: string
+          description: Human-readable error message
+        description:
+          type: string
+          description: Detailed error description
+        variant:
+          type: string
+          example: "error"
+
+    STTCloseEvent:
+      type: object
+      description: Connection closed event
+      properties:
+        type:
+          type: string
+          example: "Close"
+
+    AudioConfig:
+      type: object
+      description: Audio configuration for transcription
+      properties:
+        encoding:
+          type: string
+          enum: ["linear16", "flac", "mulaw", "alaw", "mp3", "mp4", "opus", "wav"]
+          description: Audio encoding format
+        sample_rate:
+          type: string
+          pattern: "^[1-9]\\d*$"
+          description: Audio sample rate in Hz (e.g., "44100", "48000")
+        language:
+          type: string
+          enum: ["en", "en-US", "en-AU", "en-GB", "en-NZ", "en-IN", "es", "es-419", "fr", "fr-CA", "de", "it", "pt", "pt-BR", "ru", "hi", "ja", "ko", "zh", "zh-CN", "zh-TW", "nl", "tr", "pl", "sv", "no", "da", "fi", "uk", "el", "cs"]
+          description: BCP-47 language tag for transcription
+
+    AudioTranscription:
+      type: object
+      description: Audio transcription result
+      required:
+        - transcript
+        - confidence
+      properties:
+        transcript:
+          type: string
+          description: The transcribed text from the audio
+        confidence:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: Confidence score for the transcription (0.0 to 1.0)
+        words:
+          type: array
+          items:
+            $ref: '#/components/schemas/STTWord'
+          description: Individual words with timing information (optional)
+        duration:
+          type: number
+          format: double
+          description: Duration of the audio in seconds
+  responses:
+    RequestError:
+      description: ''
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - message
+            properties:
+              message:
+                type: string
+                description: Error message
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer key for authentication
+    TokenAuth:
+      type: apiKey
+      in: query
+      name: token
+      description: Token-based authentication via query parameter
+security:
+  - BearerAuth: []
