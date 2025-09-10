@@ -128,9 +128,13 @@ export const actionsList = [
         description: 'Find and go to the nearest block of a given type in a given range.',
         params: {
             'type': { type: 'BlockName', description: 'The block type to go to.' },
-            'search_range': { type: 'float', description: 'The range to search for the block.', domain: [32, 512] }
+            'search_range': { type: 'float', description: 'The range to search for the block. Minimum 32.', domain: [10, 512] }
         },
         perform: runAsAction(async (agent, block_type, range) => {
+            if (range < 32) {
+                log(agent.bot, `Minimum search range is 32.`);
+                range = 32;
+            }
             await skills.goToNearestBlock(agent.bot, block_type, 4, range);
         })
     },
@@ -332,14 +336,6 @@ export const actionsList = [
         })
     },
     {
-        name: '!activate',
-        description: 'Activate the nearest object of a given type.',
-        params: {'type': { type: 'BlockName', description: 'The type of object to activate.' }},
-        perform: runAsAction(async (agent, type) => {
-            await skills.activateNearestBlock(agent.bot, type);
-        })
-    },
-    {
         name: '!stay',
         description: 'Stay in the current location no matter what. Pauses all modes.',
         params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER] }},
@@ -386,6 +382,26 @@ export const actionsList = [
             agent.self_prompter.stop();
             return 'Self-prompting stopped.';
         }
+    },
+    {
+        name: '!showVillagerTrades',
+        description: 'Show trades of a specified villager.',
+        params: {'id': { type: 'int', description: 'The id number of the villager that you want to trade with.' }},
+        perform: runAsAction(async (agent, id) => {
+            await skills.showVillagerTrades(agent.bot, id);
+        })
+    },
+    {
+        name: '!tradeWithVillager',
+        description: 'Trade with a specified villager.',
+        params: {
+            'id': { type: 'int', description: 'The id number of the villager that you want to trade with.' },
+            'index': { type: 'int', description: 'The index of the trade you want executed (1-indexed).', domain: [1, Number.MAX_SAFE_INTEGER] },
+            'count': { type: 'int', description: 'How many times that trade should be executed.', domain: [1, Number.MAX_SAFE_INTEGER] },
+        },
+        perform: runAsAction(async (agent, id, index, count) => {
+            await skills.tradeWithVillager(agent.bot, id, index, count);
+        })
     },
     {
         name: '!startConversation',
@@ -462,6 +478,17 @@ export const actionsList = [
         params: {'distance': { type: 'int', description: 'Distance to dig down', domain: [1, Number.MAX_SAFE_INTEGER] }},
         perform: runAsAction(async (agent, distance) => {
             await skills.digDown(agent.bot, distance)
+        })
+    },
+    {
+        name: '!useOn',
+        description: 'Use (right click) the given tool on the nearest target of the given type.',
+        params: {
+            'tool_name': { type: 'string', description: 'Name of the tool to use, or "hand" for no tool.' },
+            'target': { type: 'string', description: 'The target as an entity type, block type, or "nothing" for no target.' }
+        },
+        perform: runAsAction(async (agent, tool_name, target) => {
+            await skills.useToolOn(agent.bot, tool_name, target);
         })
     },
 ];
