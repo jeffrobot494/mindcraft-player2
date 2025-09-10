@@ -1,6 +1,16 @@
 {
     "name": "andy",
-
-    "model": "gpt-4o-mini"
-
+    "model": {
+      "api": "openai",
+      "model": "gpt-5-nano"
+    },
+    "vision_model": {
+      "api": "openai",
+      "model": "gpt-4o"
+    },
+    "embedding": {
+      "api": "openai",
+      "model": "text-embedding-3-small"
+    },
+    "speak_model": "player2/default/male"
 }
