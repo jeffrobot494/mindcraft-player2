@@ -1,5 +1,5 @@
 import { getPlayer2ApiKey, clearPlayer2Cache, validatePlayer2Key } from './src/utils/player2_auth.js';
-import { getPlayer2Voices } from './src/models/player2.js';
+import { getPlayer2Voices, TTSConfig } from './src/models/player2.js';
 
 async function testPlayer2Auth() {
     console.log('=== Testing Player2 Authentication ===\n');
@@ -31,7 +31,41 @@ async function testPlayer2Auth() {
             console.log(`  ... and ${voices.length - 5} more voices`);
         }
 
-        console.log('\n=== All tests passed! ===');
+        // Test SSML support
+        console.log('\n4. Testing SSML support...');
+        const ssmlTests = [
+            // Test 1: Basic SSML with speak tags
+            '<speak>Hello, this is a <emphasis>test</emphasis> of SSML support.</speak>',
+            // Test 2: Prosody (rate/pitch changes)
+            '<speak>This is <prosody rate="slow">slow speech</prosody> and <prosody rate="fast">fast speech</prosody>.</speak>',
+            // Test 3: Break/pause
+            '<speak>First part. <break time="1s"/> Second part after pause.</speak>',
+            // Test 4: Plain text (control)
+            'This is plain text without SSML tags.'
+        ];
+
+        for (let i = 0; i < ssmlTests.length; i++) {
+            const testText = ssmlTests[i];
+            console.log(`\n   Test ${i + 1}: ${testText.length > 60 ? testText.substring(0, 60) + '...' : testText}`);
+            
+            try {
+                const audioData = await TTSConfig.sendAudioRequest(testText, 'default', 'female', 'https://api.player2.game/v1');
+                console.log(`   ✓ Generated audio: ${audioData.length} bytes`);
+                
+                // Check if the response seems different (indicating SSML processing)
+                if (i === 0) {
+                    console.log(`   📝 Baseline audio length: ${audioData.length} bytes`);
+                }
+            } catch (error) {
+                console.log(`   ❌ Failed: ${error.message}`);
+            }
+        }
+
+        console.log('\n=== All tests completed! ===');
+        console.log('\nSSML Notes:');
+        console.log('- Compare audio lengths and quality between SSML and plain text');
+        console.log('- If SSML is supported, prosody/emphasis should affect output');
+        console.log('- Listen to the generated audio to detect differences');
         
     } catch (error) {
         console.error('\n❌ Authentication failed:', error.message);
